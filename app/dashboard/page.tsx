@@ -92,7 +92,7 @@ export default function DashboardPage() {
               </div>
             ) : (
               <div className="text-center py-12 bg-white rounded-lg shadow">
-                <p className="text-gray-500 mb-4">You don't have any accounts yet.</p>
+                <p className="text-gray-500 mb-4">You don&apos;t have any accounts yet.</p>
               </div>
             )}
 

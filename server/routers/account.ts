@@ -1,14 +1,43 @@
 import { z } from "zod";
+import crypto from "crypto";
 import { TRPCError } from "@trpc/server";
 import { protectedProcedure, router } from "../trpc";
 import { db } from "@/lib/db";
 import { accounts, transactions } from "@/lib/db/schema";
-import { eq, and } from "drizzle-orm";
+import { eq, and, desc } from "drizzle-orm";
 
+// BUG-12 fix: Use cryptographically secure random number generator
 function generateAccountNumber(): string {
-  return Math.floor(Math.random() * 1000000000)
-    .toString()
-    .padStart(10, "0");
+  const bytes = crypto.randomBytes(5); // 5 bytes = 10 hex chars, plenty of entropy
+  const num = parseInt(bytes.toString("hex"), 16) % 10000000000;
+  return num.toString().padStart(10, "0");
+}
+
+// BUG-07 fix: Luhn algorithm for card number validation
+function isValidLuhn(cardNumber: string): boolean {
+  let sum = 0;
+  let isEven = false;
+  for (let i = cardNumber.length - 1; i >= 0; i--) {
+    let digit = parseInt(cardNumber[i], 10);
+    if (isEven) {
+      digit *= 2;
+      if (digit > 9) {
+        digit -= 9;
+      }
+    }
+    sum += digit;
+    isEven = !isEven;
+  }
+  return sum % 10 === 0;
+}
+
+// BUG-07 fix: Detect card type from number with broader network support
+function detectCardType(cardNumber: string): string | null {
+  if (/^4\d{12}(\d{3})?$/.test(cardNumber)) return "visa";
+  if (/^5[1-5]\d{14}$/.test(cardNumber)) return "mastercard";
+  if (/^3[47]\d{13}$/.test(cardNumber)) return "amex";
+  if (/^6(?:011|5\d{2})\d{12}$/.test(cardNumber)) return "discover";
+  return null;
 }
 
 export const accountRouter = router({
@@ -54,17 +83,15 @@ export const accountRouter = router({
       // Fetch the created account
       const account = await db.select().from(accounts).where(eq(accounts.accountNumber, accountNumber!)).get();
 
-      return (
-        account || {
-          id: 0,
-          userId: ctx.user.id,
-          accountNumber: accountNumber!,
-          accountType: input.accountType,
-          balance: 100,
-          status: "pending",
-          createdAt: new Date().toISOString(),
-        }
-      );
+      // BUG-16 fix: throw error instead of returning phantom $100 balance
+      if (!account) {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "Failed to create account. Please try again.",
+        });
+      }
+
+      return account;
     }),
 
   getAccounts: protectedProcedure.query(async ({ ctx }) => {
@@ -77,16 +104,46 @@ export const accountRouter = router({
     .input(
       z.object({
         accountId: z.number(),
-        amount: z.number().positive(),
+        // BUG-06 fix: min is now 0.01, not 0
+        amount: z.number().min(0.01, "Amount must be at least $0.01").max(10000, "Amount cannot exceed $10,000"),
         fundingSource: z.object({
           type: z.enum(["card", "bank"]),
-          accountNumber: z.string(),
+          accountNumber: z.string().min(1, "Account/card number is required"),
           routingNumber: z.string().optional(),
         }),
       })
     )
     .mutation(async ({ input, ctx }) => {
-      const amount = parseFloat(input.amount.toString());
+      // BUG-08 fix: require routing number for bank transfers
+      if (input.fundingSource.type === "bank") {
+        if (!input.fundingSource.routingNumber || !/^\d{9}$/.test(input.fundingSource.routingNumber)) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "A valid 9-digit routing number is required for bank transfers",
+          });
+        }
+      }
+
+      // BUG-07 fix: validate card numbers with Luhn + type detection
+      if (input.fundingSource.type === "card") {
+        const cardNum = input.fundingSource.accountNumber;
+        const cardType = detectCardType(cardNum);
+        if (!cardType) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "Invalid card number. We accept Visa, Mastercard, Amex, and Discover.",
+          });
+        }
+        if (!isValidLuhn(cardNum)) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "Invalid card number. Please check and try again.",
+          });
+        }
+      }
+
+      // Round to 2 decimal places to avoid float issues
+      const amount = Math.round(input.amount * 100) / 100;
 
       // Verify account belongs to user
       const account = await db
@@ -119,25 +176,29 @@ export const accountRouter = router({
         processedAt: new Date().toISOString(),
       });
 
-      // Fetch the created transaction
-      const transaction = await db.select().from(transactions).orderBy(transactions.createdAt).limit(1).get();
+      // BUG-20 fix: get the NEWEST transaction (desc order), not oldest
+      const transaction = await db
+        .select()
+        .from(transactions)
+        .where(eq(transactions.accountId, input.accountId))
+        .orderBy(desc(transactions.id))
+        .limit(1)
+        .get();
+
+      // BUG-21 fix: calculate balance correctly using integer arithmetic
+      const newBalance = Math.round((account.balance + amount) * 100) / 100;
 
       // Update account balance
       await db
         .update(accounts)
         .set({
-          balance: account.balance + amount,
+          balance: newBalance,
         })
         .where(eq(accounts.id, input.accountId));
 
-      let finalBalance = account.balance;
-      for (let i = 0; i < 100; i++) {
-        finalBalance = finalBalance + amount / 100;
-      }
-
       return {
         transaction,
-        newBalance: finalBalance, // This will be slightly off due to float precision
+        newBalance,
       };
     }),
 
@@ -162,20 +223,18 @@ export const accountRouter = router({
         });
       }
 
+      // BUG-19 fix: sort transactions by creation date descending (newest first)
       const accountTransactions = await db
         .select()
         .from(transactions)
-        .where(eq(transactions.accountId, input.accountId));
+        .where(eq(transactions.accountId, input.accountId))
+        .orderBy(desc(transactions.createdAt));
 
-      const enrichedTransactions = [];
-      for (const transaction of accountTransactions) {
-        const accountDetails = await db.select().from(accounts).where(eq(accounts.id, transaction.accountId)).get();
-
-        enrichedTransactions.push({
-          ...transaction,
-          accountType: accountDetails?.accountType,
-        });
-      }
+      // BUG-22 fix: use already-fetched account data instead of N+1 queries
+      const enrichedTransactions = accountTransactions.map((transaction) => ({
+        ...transaction,
+        accountType: account.accountType,
+      }));
 
       return enrichedTransactions;
     }),

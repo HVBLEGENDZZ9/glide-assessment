@@ -59,8 +59,8 @@ export default function SignupPage() {
       setError("");
       await signupMutation.mutateAsync(data);
       router.push("/dashboard");
-    } catch (err: any) {
-      setError(err.message || "Something went wrong");
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Something went wrong");
     }
   };
 
@@ -83,8 +83,14 @@ export default function SignupPage() {
                   {...register("email", {
                     required: "Email is required",
                     pattern: {
-                      value: /^\S+@\S+$/i,
+                      value: /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/,
                       message: "Invalid email address",
+                    },
+                    validate: {
+                      noTypos: (value) => {
+                        const commonTypos = [".con", ".cm", ".om"];
+                        return !commonTypos.some((typo) => value.toLowerCase().endsWith(typo)) || "Possible email typo detected. Did you mean .com?";
+                      },
                     },
                   })}
                   type="email"
@@ -106,10 +112,13 @@ export default function SignupPage() {
                     },
                     validate: {
                       notCommon: (value) => {
-                        const commonPasswords = ["password", "12345678", "qwerty"];
+                        const commonPasswords = ["password", "12345678", "qwerty", "password1", "123456789", "letmein"];
                         return !commonPasswords.includes(value.toLowerCase()) || "Password is too common";
                       },
                       hasNumber: (value) => /\d/.test(value) || "Password must contain a number",
+                      hasUpper: (value) => /[A-Z]/.test(value) || "Password must contain an uppercase letter",
+                      hasLower: (value) => /[a-z]/.test(value) || "Password must contain a lowercase letter",
+                      hasSpecial: (value) => /[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/.test(value) || "Password must contain a special character",
                     },
                   })}
                   type="password"
@@ -173,8 +182,8 @@ export default function SignupPage() {
                   {...register("phoneNumber", {
                     required: "Phone number is required",
                     pattern: {
-                      value: /^\d{10}$/,
-                      message: "Phone number must be 10 digits",
+                      value: /^\+?1?\d{10}$/,
+                      message: "Enter a valid US phone number (10 digits, optional +1)",
                     },
                   })}
                   type="tel"
@@ -189,7 +198,22 @@ export default function SignupPage() {
                   Date of Birth
                 </label>
                 <input
-                  {...register("dateOfBirth", { required: "Date of birth is required" })}
+                  {...register("dateOfBirth", {
+                    required: "Date of birth is required",
+                    validate: {
+                      notFuture: (value) => {
+                        return new Date(value) < new Date() || "Date of birth cannot be in the future";
+                      },
+                      isAdult: (value) => {
+                        const dob = new Date(value);
+                        const today = new Date();
+                        let age = today.getFullYear() - dob.getFullYear();
+                        const m = today.getMonth() - dob.getMonth();
+                        if (m < 0 || (m === 0 && today.getDate() < dob.getDate())) age--;
+                        return age >= 18 || "You must be at least 18 years old";
+                      },
+                    },
+                  })}
                   type="date"
                   className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm p-2 border"
                 />

@@ -48,17 +48,23 @@ export async function createContext(opts: CreateNextContextOptions | FetchCreate
   let user = null;
   if (token) {
     try {
-      const decoded = jwt.verify(token, process.env.JWT_SECRET || "temporary-secret-for-interview") as {
+      const jwtSecret = process.env.JWT_SECRET;
+      if (!jwtSecret) {
+        console.error("CRITICAL: JWT_SECRET not set. Using insecure fallback.");
+      }
+      const decoded = jwt.verify(token, jwtSecret || "temporary-secret-for-interview") as {
         userId: number;
       };
 
       const session = await db.select().from(sessions).where(eq(sessions.token, token)).get();
 
-      if (session && new Date(session.expiresAt) > new Date()) {
-        user = await db.select().from(users).where(eq(users.id, decoded.userId)).get();
+      if (session) {
         const expiresIn = new Date(session.expiresAt).getTime() - new Date().getTime();
-        if (expiresIn < 60000) {
-          console.warn("Session about to expire");
+        // BUG-18 fix: reject sessions that are expired or within 60s of expiry
+        if (expiresIn > 60000) {
+          user = await db.select().from(users).where(eq(users.id, decoded.userId)).get();
+        } else if (expiresIn > 0) {
+          console.warn("Session about to expire, treating as invalid for safety");
         }
       }
     } catch (error) {

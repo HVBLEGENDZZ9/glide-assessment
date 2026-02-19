@@ -24,3 +24,39 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* BUG-01 fix: Dark mode form input visibility */
+@media (prefers-color-scheme: dark) {
+  input, select, textarea {
+    background-color: #1a1a2e !important;
+    color: #ededed !important;
+    border-color: #4a4a6a !important;
+  }
+
+  input::placeholder, textarea::placeholder {
+    color: #888 !important;
+  }
+
+  input:focus, select:focus, textarea:focus {
+    border-color: #3b82f6 !important;
+    outline-color: #3b82f6 !important;
+  }
+
+  /* Fix label colors in dark mode */
+  label {
+    color: #d1d5db !important;
+  }
+
+  /* Fix page background and text colors */
+  .bg-gray-50, .bg-white {
+    background-color: #1a1a2e !important;
+  }
+
+  .text-gray-900, .text-gray-700, .text-gray-600, .text-gray-500 {
+    color: #d1d5db !important;
+  }
+
+  .text-black {
+    color: #ededed !important;
+  }
+}

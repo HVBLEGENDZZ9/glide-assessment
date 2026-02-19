@@ -50,8 +50,8 @@ export function FundingModal({ accountId, onClose, onSuccess }: FundingModalProp
       });
 
       onSuccess();
-    } catch (err: any) {
-      setError(err.message || "Failed to fund account");
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed to fund account");
     }
   };
 
@@ -71,11 +71,11 @@ export function FundingModal({ accountId, onClose, onSuccess }: FundingModalProp
                 {...register("amount", {
                   required: "Amount is required",
                   pattern: {
-                    value: /^\d+\.?\d{0,2}$/,
-                    message: "Invalid amount format",
+                    value: /^(?!0\d)\d+(\.\d{1,2})?$/,
+                    message: "Invalid amount format (no leading zeros)",
                   },
                   min: {
-                    value: 0.0,
+                    value: 0.01,
                     message: "Amount must be at least $0.01",
                   },
                   max: {
@@ -113,13 +113,25 @@ export function FundingModal({ accountId, onClose, onSuccess }: FundingModalProp
               {...register("accountNumber", {
                 required: `${fundingType === "card" ? "Card" : "Account"} number is required`,
                 pattern: {
-                  value: fundingType === "card" ? /^\d{16}$/ : /^\d+$/,
-                  message: fundingType === "card" ? "Card number must be 16 digits" : "Invalid account number",
+                  value: fundingType === "card" ? /^\d{13,19}$/ : /^\d+$/,
+                  message: fundingType === "card" ? "Card number must be 13-19 digits" : "Invalid account number",
                 },
                 validate: {
                   validCard: (value) => {
                     if (fundingType !== "card") return true;
-                    return value.startsWith("4") || value.startsWith("5") || "Invalid card number";
+                    // Support Visa (4), Mastercard (51-55), Amex (34,37), Discover (6011,65)
+                    const validPrefix = /^(4|5[1-5]|3[47]|6011|65)/.test(value);
+                    if (!validPrefix) return "We accept Visa, Mastercard, Amex, and Discover";
+                    // Luhn check
+                    let sum = 0;
+                    let isEven = false;
+                    for (let i = value.length - 1; i >= 0; i--) {
+                      let digit = parseInt(value[i], 10);
+                      if (isEven) { digit *= 2; if (digit > 9) digit -= 9; }
+                      sum += digit;
+                      isEven = !isEven;
+                    }
+                    return sum % 10 === 0 || "Invalid card number. Please check and try again.";
                   },
                 },
               })}
